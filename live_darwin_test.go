@@ -46,35 +46,45 @@ import (
 
 const integrationEnv = "SCREENCAPTURE_INTEGRATION"
 
-// captureDir is where a capture of a REAL screen may be written, and it is
-// never inside a repository.
+// captureDir is where a capture of a REAL screen may be written: somewhere
+// durable, and never inside a repository.
 //
 // A screen capture is a picture of whoever ran the test, at work. This
 // repository is public, and a .gitignore is a safety net rather than a barrier:
 // `git add -f`, a fresh clone, or any tool that does not consult it will publish
-// the file anyway. So captures do not go where they could be committed AT ALL.
+// the file anyway. So captures do not go where they could be committed at all.
 //
-// Set SCREENCAPTURE_ARTIFACT_DIR to keep them; otherwise they land in the
-// test's own temporary directory and vanish with it. Either way the path is
-// logged, so a person can go and look.
+// Nor do they go somewhere that evaporates. The artefact exists SO THAT A PERSON
+// CAN LOOK AT IT, and t.TempDir() is removed when the test ends — it would be
+// gone before anyone could. The default is therefore the user's own application
+// support directory, which survives the test and the machine restarting.
+// SCREENCAPTURE_ARTIFACT_DIR overrides it. The path is logged either way.
 func captureDir(t *testing.T) string {
 	t.Helper()
-	dir := os.Getenv("SCREENCAPTURE_ARTIFACT_DIR")
+	const env = "SCREENCAPTURE_ARTIFACT_DIR"
+	// chose names the directory the way the person who has to read a failure
+	// would: by the variable when they set one, by what it is otherwise.
+	dir, chose := os.Getenv(env), env
 	if dir == "" {
-		return t.TempDir()
+		chose = "the default capture directory"
+		base, err := os.UserConfigDir()
+		if err != nil {
+			t.Fatalf("no user configuration directory to keep captures in: %v", err)
+		}
+		dir = filepath.Join(base, "go-macos-screencapture", "captures")
 	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
-		t.Fatalf("SCREENCAPTURE_ARTIFACT_DIR=%q: %v", dir, err)
+		t.Fatalf("%s (%q): %v", chose, dir, err)
 	}
 	// The refusal is the point. A directory a person chose is still checked,
 	// because the mistake this prevents is exactly the one a person makes.
 	if root := repoRootOf(abs); root != "" {
-		t.Fatalf("SCREENCAPTURE_ARTIFACT_DIR=%q is inside the git work tree at %s; "+
-			"a screen capture must never be written where it can be committed", abs, root)
+		t.Fatalf("%s (%q) is inside the git work tree at %s; "+
+			"a screen capture must never be written where it can be committed", chose, abs, root)
 	}
 	if err := os.MkdirAll(abs, 0o755); err != nil {
-		t.Fatalf("SCREENCAPTURE_ARTIFACT_DIR=%q: %v", abs, err)
+		t.Fatalf("%s (%q): %v", chose, abs, err)
 	}
 	return abs
 }
