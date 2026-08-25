@@ -46,8 +46,62 @@ import (
 
 const integrationEnv = "SCREENCAPTURE_INTEGRATION"
 
-// artifactDir is where the PNG proof is written.
-const artifactDir = "testdata/artifacts"
+// captureDir is where a capture of a REAL screen may be written: somewhere
+// durable, and never inside a repository.
+//
+// A screen capture is a picture of whoever ran the test, at work. This
+// repository is public, and a .gitignore is a safety net rather than a barrier:
+// `git add -f`, a fresh clone, or any tool that does not consult it will publish
+// the file anyway. So captures do not go where they could be committed at all.
+//
+// Nor do they go somewhere that evaporates. The artefact exists SO THAT A PERSON
+// CAN LOOK AT IT, and t.TempDir() is removed when the test ends — it would be
+// gone before anyone could. The default is therefore the user's own application
+// support directory, which survives the test and the machine restarting.
+// SCREENCAPTURE_ARTIFACT_DIR overrides it. The path is logged either way.
+func captureDir(t *testing.T) string {
+	t.Helper()
+	const env = "SCREENCAPTURE_ARTIFACT_DIR"
+	// chose names the directory the way the person who has to read a failure
+	// would: by the variable when they set one, by what it is otherwise.
+	dir, chose := os.Getenv(env), env
+	if dir == "" {
+		chose = "the default capture directory"
+		base, err := os.UserConfigDir()
+		if err != nil {
+			t.Fatalf("no user configuration directory to keep captures in: %v", err)
+		}
+		dir = filepath.Join(base, "go-macos-screencapture", "captures")
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatalf("%s (%q): %v", chose, dir, err)
+	}
+	// The refusal is the point. A directory a person chose is still checked,
+	// because the mistake this prevents is exactly the one a person makes.
+	if root := repoRootOf(abs); root != "" {
+		t.Fatalf("%s (%q) is inside the git work tree at %s; "+
+			"a screen capture must never be written where it can be committed", chose, abs, root)
+	}
+	if err := os.MkdirAll(abs, 0o755); err != nil {
+		t.Fatalf("%s (%q): %v", chose, abs, err)
+	}
+	return abs
+}
+
+// repoRootOf returns the work tree dir contains, or "" if it is in none.
+func repoRootOf(dir string) string {
+	for d := dir; ; {
+		if fi, err := os.Stat(filepath.Join(d, ".git")); err == nil && (fi.IsDir() || fi.Mode().IsRegular()) {
+			return d
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return ""
+		}
+		d = parent
+	}
+}
 
 // mainfuncs carries work to the reserved main OS thread.
 var mainfuncs = make(chan func(), 8)
@@ -348,15 +402,14 @@ func TestLiveWindowCapture(t *testing.T) {
 		t.Errorf("only %d frames were delivered", st.Frames)
 	}
 
-	// 7. The PNG artefact, so a human can look at it.
-	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	// 7. The PNG artefact, so a human can look at it — written outside any
+	// repository, like every capture this package makes.
+	dir := captureDir(t)
 	img, err := f2.NRGBA()
 	if err != nil {
 		t.Fatalf("NRGBA: %v", err)
 	}
-	path := filepath.Join(artifactDir, "window-capture.png")
+	path := filepath.Join(dir, "window-capture.png")
 	out, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
@@ -561,6 +614,12 @@ func TestLiveDisplayFilterPath(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
+	// The probe window must exist BEFORE the content is listed. Shareable
+	// content is a SNAPSHOT: a window created after it was taken is simply not
+	// in it, so the exclusion list built from that listing comes back empty and
+	// the excludingWindows: argument is never really exercised.
+	p := newProbeWindow(t, 300, 200)
+
 	// Prefer the permissioned listing when the machine has the grant, since
 	// that is the real path; fall back to the permission-free one.
 	raw, err := fetchContent(ctx, false)
@@ -584,10 +643,6 @@ func TestLiveDisplayFilterPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("display under test: %s", d)
-
-	// A probe window of our own gives the exclusion list something real to
-	// carry, so the excludingWindows: argument is not an empty array.
-	p := newProbeWindow(t, 300, 200)
 
 	var filter objc.ID
 	var resolved Options
@@ -644,14 +699,12 @@ func TestLiveDisplayFilterPath(t *testing.T) {
 		t.Errorf("display frame is %dx%d, %dx%d was requested",
 			f.Width, f.Height, resolved.Width, resolved.Height)
 	}
-	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := captureDir(t)
 	img, err := f.NRGBA()
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(artifactDir, "display-capture.png")
+	path := filepath.Join(dir, "display-capture.png")
 	out, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
