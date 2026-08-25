@@ -179,8 +179,19 @@ SCREENCAPTURE_INTEGRATION=1 go test -tags integration -run '^$' \
         -bench . -benchmem -benchtime 500000x .
 ```
 
-The live suite writes a PNG to `testdata/artifacts/window-capture.png` so a human
-can look at what was actually captured.
+**Captures never go in the repository.** The live suite writes its PNGs to
+`os.UserConfigDir()/go-macos-screencapture/captures`, or to
+`SCREENCAPTURE_ARTIFACT_DIR` when set — and either way the directory is walked
+up to the filesystem root looking for a `.git`, and REFUSED if one is found,
+including a `.git` that is a *file*, which is what a worktree has. A capture is
+a picture of whoever ran the test, at work, and a `.gitignore` entry is not a
+control: it is one `git add -f` away from being published forever. It does not
+go to `t.TempDir()` either — the artefact exists so that a person can look at
+it, and a temporary directory is gone before anyone can. The refusal is tested
+on every platform and every lane in `capturedir_test.go`, which is deliberately
+untagged: a guard that only compiles where the live suite runs is a guard
+nobody runs. The frame committed under `testdata/artifacts/` was put there by
+hand, from a disposable machine.
 
 ## Tested against real hardware
 
