@@ -1,5 +1,10 @@
 # go-macos/screencapture
 
+[![ci](https://github.com/go-macos/screencapture/actions/workflows/ci.yml/badge.svg)](https://github.com/go-macos/screencapture/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/go-macos/screencapture.svg)](https://pkg.go.dev/github.com/go-macos/screencapture)
+[![Coverage](https://img.shields.io/badge/coverage-100%25%20portable%20layer-1a7f37)](#verifying-it-yourself)
+[![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
+
 Screen and window capture on macOS from pure Go — `CGO_ENABLED=0`, via
 [purego](https://github.com/ebitengine/purego) and
 [go-macos/objc](https://github.com/go-macos/objc). A thin, honest wrapper over
@@ -174,8 +179,53 @@ SCREENCAPTURE_INTEGRATION=1 go test -tags integration -run '^$' \
         -bench . -benchmem -benchtime 500000x .
 ```
 
-The live suite writes a PNG to `testdata/artifacts/window-capture.png` so a human
-can look at what was actually captured.
+**Captures never go in the repository.** The live suite writes its PNGs to
+`os.UserConfigDir()/go-macos-screencapture/captures`, or to
+`SCREENCAPTURE_ARTIFACT_DIR` when set — and either way the directory is walked
+up to the filesystem root looking for a `.git`, and REFUSED if one is found,
+including a `.git` that is a *file*, which is what a worktree has. A capture is
+a picture of whoever ran the test, at work, and a `.gitignore` entry is not a
+control: it is one `git add -f` away from being published forever. It does not
+go to `t.TempDir()` either — the artefact exists so that a person can look at
+it, and a temporary directory is gone before anyone can. The refusal is tested
+on every platform and every lane in `capturedir_test.go`, which is deliberately
+untagged: a guard that only compiles where the live suite runs is a guard
+nobody runs. The frame committed under `testdata/artifacts/` was put there by
+hand, from a disposable machine.
+
+## Tested against real hardware
+
+This section separates what was actually run on a machine from what is known
+only from Apple's documentation. The difference matters: a capture path that was
+never executed can be wrong in a way that no compile and no unit test reports.
+
+### Hardware connected and exercised
+
+| Hardware | What was actually done |
+|---|---|
+| Apple M4 Max, macOS 26.6.2 (build 25G83), Go 1.26.4, `CGO_ENABLED=0` | every figure in **Measured**, and everything below |
+| Samsung Odyssey G95NC, 7680×2160 | the display attached while those figures were taken |
+| **Capture of this process's own window** | proven, not asserted: the live suite opens a real `NSWindow`, paints it, captures it, and requires the captured centre pixel to be exactly the colour just painted — and then to CHANGE when the window is repainted |
+| The real ScreenCaptureKit classes and selectors | looked up in the live Objective-C runtime, including the `CMTime` by-value ABI round trip through a real `SCStreamConfiguration` |
+
+### Not proven on hardware
+
+- **Capture of a whole display, and of another process's window.** Both need
+  the Screen Recording TCC grant, which could not be granted on the machine
+  this was built on. What IS exercised there is the refusal: the denial path
+  returns `ErrPermissionDenied` with the remedy in its message, and that is
+  asserted. The pixels themselves are not.
+- **Intel Macs.** `darwin/amd64` is cross-compiled and vetted in CI on every
+  push; no Intel Mac ever ran it.
+- **macOS 12.3 through 25.** The stated floor comes from Apple's availability
+  annotations, not from a machine. Only 26.6.2 was run.
+
+### Send us hardware
+
+An Intel Mac, an older macOS, or a machine where Screen Recording can be
+granted would each close one of the gaps above. If you want one of them closed,
+**send us the hardware** and what it shows will be listed here. Until then, an
+unverified line says so.
 
 ## What this package does not do
 
