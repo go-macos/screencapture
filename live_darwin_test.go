@@ -561,6 +561,12 @@ func TestLiveDisplayFilterPath(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
+	// The probe window must exist BEFORE the content is listed. Shareable
+	// content is a SNAPSHOT: a window created after it was taken is simply not
+	// in it, so the exclusion list built from that listing comes back empty and
+	// the excludingWindows: argument is never really exercised.
+	p := newProbeWindow(t, 300, 200)
+
 	// Prefer the permissioned listing when the machine has the grant, since
 	// that is the real path; fall back to the permission-free one.
 	raw, err := fetchContent(ctx, false)
@@ -584,10 +590,6 @@ func TestLiveDisplayFilterPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("display under test: %s", d)
-
-	// A probe window of our own gives the exclusion list something real to
-	// carry, so the excludingWindows: argument is not an empty array.
-	p := newProbeWindow(t, 300, 200)
 
 	var filter objc.ID
 	var resolved Options
