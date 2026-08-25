@@ -1,12 +1,3 @@
 cover.out
 portable.txt
 stubs.txt
-
-# A whole-DISPLAY capture is a picture of whoever ran the test, at work, and this
-# repository is public. The live test writes one here on purpose — it is the
-# proof that the display path delivers pixels — and it must never be committed.
-#
-# testdata/artifacts/window-capture.png IS committed, and the difference is the
-# point: that one is a capture of this package's own test window, a blue
-# rectangle it drew itself, which discloses nothing.
-testdata/artifacts/display-capture.png

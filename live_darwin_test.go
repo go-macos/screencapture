@@ -46,8 +46,52 @@ import (
 
 const integrationEnv = "SCREENCAPTURE_INTEGRATION"
 
-// artifactDir is where the PNG proof is written.
-const artifactDir = "testdata/artifacts"
+// captureDir is where a capture of a REAL screen may be written, and it is
+// never inside a repository.
+//
+// A screen capture is a picture of whoever ran the test, at work. This
+// repository is public, and a .gitignore is a safety net rather than a barrier:
+// `git add -f`, a fresh clone, or any tool that does not consult it will publish
+// the file anyway. So captures do not go where they could be committed AT ALL.
+//
+// Set SCREENCAPTURE_ARTIFACT_DIR to keep them; otherwise they land in the
+// test's own temporary directory and vanish with it. Either way the path is
+// logged, so a person can go and look.
+func captureDir(t *testing.T) string {
+	t.Helper()
+	dir := os.Getenv("SCREENCAPTURE_ARTIFACT_DIR")
+	if dir == "" {
+		return t.TempDir()
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		t.Fatalf("SCREENCAPTURE_ARTIFACT_DIR=%q: %v", dir, err)
+	}
+	// The refusal is the point. A directory a person chose is still checked,
+	// because the mistake this prevents is exactly the one a person makes.
+	if root := repoRootOf(abs); root != "" {
+		t.Fatalf("SCREENCAPTURE_ARTIFACT_DIR=%q is inside the git work tree at %s; "+
+			"a screen capture must never be written where it can be committed", abs, root)
+	}
+	if err := os.MkdirAll(abs, 0o755); err != nil {
+		t.Fatalf("SCREENCAPTURE_ARTIFACT_DIR=%q: %v", abs, err)
+	}
+	return abs
+}
+
+// repoRootOf returns the work tree dir contains, or "" if it is in none.
+func repoRootOf(dir string) string {
+	for d := dir; ; {
+		if fi, err := os.Stat(filepath.Join(d, ".git")); err == nil && (fi.IsDir() || fi.Mode().IsRegular()) {
+			return d
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return ""
+		}
+		d = parent
+	}
+}
 
 // mainfuncs carries work to the reserved main OS thread.
 var mainfuncs = make(chan func(), 8)
@@ -348,15 +392,14 @@ func TestLiveWindowCapture(t *testing.T) {
 		t.Errorf("only %d frames were delivered", st.Frames)
 	}
 
-	// 7. The PNG artefact, so a human can look at it.
-	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	// 7. The PNG artefact, so a human can look at it — written outside any
+	// repository, like every capture this package makes.
+	dir := captureDir(t)
 	img, err := f2.NRGBA()
 	if err != nil {
 		t.Fatalf("NRGBA: %v", err)
 	}
-	path := filepath.Join(artifactDir, "window-capture.png")
+	path := filepath.Join(dir, "window-capture.png")
 	out, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
@@ -646,14 +689,12 @@ func TestLiveDisplayFilterPath(t *testing.T) {
 		t.Errorf("display frame is %dx%d, %dx%d was requested",
 			f.Width, f.Height, resolved.Width, resolved.Height)
 	}
-	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := captureDir(t)
 	img, err := f.NRGBA()
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(artifactDir, "display-capture.png")
+	path := filepath.Join(dir, "display-capture.png")
 	out, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
