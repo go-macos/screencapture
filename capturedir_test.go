@@ -15,11 +15,12 @@ package screencapture
 // branch never runs is not known to work.
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/go-appdirs/outdir"
 )
 
 // captureDir is where a capture of a REAL screen may be written: somewhere
@@ -37,12 +38,9 @@ import (
 // SCREENCAPTURE_ARTIFACT_DIR overrides it. The path is logged either way.
 func captureDir(t testing.TB) string {
 	t.Helper()
-	dir, err := chooseCaptureDir(os.Getenv(captureDirEnv))
+	dir, err := outdir.Ensure(captureSpec(""))
 	if err != nil {
 		t.Fatal(err)
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("capture directory %q: %v", dir, err)
 	}
 	t.Logf("captures go to %s", dir)
 	return dir
@@ -51,52 +49,32 @@ func captureDir(t testing.TB) string {
 // captureDirEnv overrides where captures go. It is still checked.
 const captureDirEnv = "SCREENCAPTURE_ARTIFACT_DIR"
 
-// chooseCaptureDir is the decision, separated from the test plumbing so the
-// REFUSAL can be exercised without writing a capture somewhere to find out.
+// captureSpec is this repository's answer to "where may a capture go", handed
+// to the package that owns the question.
 //
-// want is the caller's choice, or "" to use the default.
-func chooseCaptureDir(want string) (string, error) {
-	// chosen names the directory the way the person who has to read a failure
-	// would: by the variable when they set one, by what it is otherwise.
-	dir, chosen := want, captureDirEnv
-	if dir == "" {
-		chosen = "the default capture directory"
-		base, err := os.UserConfigDir()
-		if err != nil {
-			return "", fmt.Errorf("no user configuration directory to keep captures in: %w", err)
-		}
-		dir = filepath.Join(base, "go-macos-screencapture", "captures")
+// ⛔ This used to be sixty lines here: the default under os.UserConfigDir, the
+// walk up for a .git, the refusal. go-appdirs/outdir is the same decision,
+// written once, and adopting it FIXED something rather than merely tidying.
+// The copy resolved no symbolic links, so a capture directory reached through
+// one -- which on macOS is the ordinary case, /tmp being a link to
+// /private/tmp -- found no work tree and was accepted. outdir resolves the
+// path first and refuses it. Same default directory, so nothing moves.
+func captureSpec(want string) outdir.Spec {
+	return outdir.Spec{
+		App:  "go-macos-screencapture",
+		Env:  captureDirEnv,
+		Sub:  "captures",
+		Want: want,
 	}
-	abs, err := filepath.Abs(dir)
-	if err != nil {
-		return "", fmt.Errorf("%s (%q): %w", chosen, dir, err)
-	}
-	// The refusal is the point. A directory a person chose is still checked,
-	// because the mistake this prevents is exactly the one a person makes.
-	if root := repoRootOf(abs); root != "" {
-		return "", fmt.Errorf("%s (%q) is inside the git work tree at %s; "+
-			"a screen capture must never be written where it can be committed", chosen, abs, root)
-	}
-	return abs, nil
 }
 
-// repoRootOf returns the work tree dir is inside, or "" if it is in none. It
-// walks all the way to the filesystem root: a capture directory three levels
-// below a checkout is still in the checkout.
-func repoRootOf(dir string) string {
-	for d := dir; ; {
-		// A .git that is a FILE is a worktree or a submodule, and commits just
-		// as well as a directory does.
-		if fi, err := os.Stat(filepath.Join(d, ".git")); err == nil && (fi.IsDir() || fi.Mode().IsRegular()) {
-			return d
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			return ""
-		}
-		d = parent
-	}
-}
+// chooseCaptureDir is the decision, separated from the test plumbing so the
+// REFUSAL can be exercised without writing a capture somewhere to find out.
+func chooseCaptureDir(want string) (string, error) { return outdir.Choose(captureSpec(want)) }
+
+// repoRootOf is outdir's, kept under this name because the tests below read
+// better for it.
+func repoRootOf(dir string) string { return outdir.RepoRootOf(dir) }
 
 // The guard has to guard.
 func TestCaptureDirRefusesTheWorkTree(t *testing.T) {
@@ -139,8 +117,15 @@ func TestChooseCaptureDirRefusesAnythingCommittable(t *testing.T) {
 			if err == nil {
 				t.Fatalf("chooseCaptureDir(%q) = %q, want a refusal", tc.want, got)
 			}
-			if !strings.Contains(err.Error(), "never be written where it can be committed") {
-				t.Errorf("refused for the wrong reason: %v", err)
+			// ⛔ The assertion is on what the refusal has to TELL somebody,
+			// not on its wording. It used to match a phrase this package
+			// wrote itself; the phrase now belongs to go-appdirs/outdir and
+			// changed, while the behaviour did not. A test that pins prose
+			// fails on a rename and passes on a silent change of meaning.
+			root := repoRootOf(wd)
+			if !strings.Contains(err.Error(), "work tree") ||
+				!strings.Contains(err.Error(), root) {
+				t.Errorf("the refusal does not name the work tree it found: %v", err)
 			}
 		})
 	}
@@ -152,5 +137,30 @@ func TestChooseCaptureDirRefusesAnythingCommittable(t *testing.T) {
 	}
 	if !filepath.IsAbs(got) {
 		t.Errorf("default capture directory %q is not absolute", got)
+	}
+}
+
+// ⛔ THE HOLE THE LOCAL COPY HAD, and the reason adopting outdir is a fix
+// rather than a tidy-up.
+//
+// The copy walked up from the path as given, resolving nothing. A capture
+// directory reached through a symbolic link therefore found no .git and was
+// accepted -- and on macOS that is the ordinary case, /tmp being a link to
+// /private/tmp. Measured before the change: the copy answered "" for a link
+// into a work tree, where outdir answers the tree.
+func TestALinkIntoAWorkTreeIsStillTheWorkTree(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(wd, link); err != nil {
+		t.Skipf("no symbolic links here: %v", err)
+	}
+	if root := repoRootOf(link); root == "" {
+		t.Error("a link into this work tree was not recognised as being in it")
+	}
+	if _, err := chooseCaptureDir(link); err == nil {
+		t.Error("a capture directory reached through a link into a work tree was accepted")
 	}
 }
